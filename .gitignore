@@ -40,3 +40,6 @@ Thumbs.db
 
 # LangSmith cache
 .langsmith/
+
+# Corpus files — copyright works must not be in version control
+Books/
