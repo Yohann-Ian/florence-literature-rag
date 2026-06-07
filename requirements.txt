@@ -13,6 +13,8 @@ cohere==5.15.0
 
 # Document parsing
 pymupdf==1.25.5
+ebooklib==0.18
+beautifulsoup4==4.12.3
 
 # Evaluation
 ragas==0.2.15
@@ -33,3 +35,5 @@ datasets==3.6.0
 # Testing
 pytest==8.3.5
 httpx==0.28.1
+
+
