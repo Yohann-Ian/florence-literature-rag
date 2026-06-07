@@ -1,0 +1,35 @@
+# Core LangChain stack
+langchain==0.3.25
+langchain-community==0.3.23
+langchain-openai==0.3.16
+langgraph==0.4.5
+
+# Vector store
+chromadb==0.6.3
+
+# Embeddings and reranking
+sentence-transformers==4.1.0
+cohere==5.15.0
+
+# Document parsing
+pymupdf==1.25.5
+
+# Evaluation
+ragas==0.2.15
+
+# Experiment tracking
+mlflow==2.22.0
+
+# API serving
+fastapi==0.115.12
+uvicorn==0.34.2
+pydantic==2.11.4
+
+# Environment and utilities
+python-dotenv==1.1.0
+tiktoken==0.9.0
+datasets==3.6.0
+
+# Testing
+pytest==8.3.5
+httpx==0.28.1

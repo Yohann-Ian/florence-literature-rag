@@ -1,0 +1,42 @@
+# Virtual environment
+venv/
+.venv/
+
+# Environment variables — never commit secrets
+.env
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Testing
+.pytest_cache/
+htmlcov/
+.coverage
+
+# MLflow
+mlruns/
+mlartifacts/
+
+# VS Code
+.vscode/
+
+# Chroma vector store (local)
+chroma_db/
+
+# Jupyter notebooks (if any)
+.ipynb_checkpoints/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# LangSmith cache
+.langsmith/
