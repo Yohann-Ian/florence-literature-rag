@@ -64,9 +64,12 @@ load_dotenv()
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 
-BOOKS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Books")
+# BOOKS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Books")
+BOOKS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Books_dev")
 CHROMA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "chroma_db")
-EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+EMBED_MODEL = "BAAI/bge-large-en-v1.5"
+
+
 BATCH_SIZE = 100
 
 
@@ -271,7 +274,8 @@ def verify_index(
 
 def build_index(
     strategy: str = "hierarchical",
-    collection_name: str = "florence_literature",
+    # collection_name: str = "florence_literature",
+    collection_name: str = "florence_literature_dev", #use a different collection name for dev ingestion, so we don't mess with the main one while testing
 ) -> None:
     """
     Full ingestion pipeline. Run this once to build Florence's index.
@@ -343,5 +347,6 @@ def build_index(
 if __name__ == "__main__":
     build_index(
         strategy="hierarchical",
-        collection_name="florence_literature",
+        # collection_name="florence_literature",
+        collection_name="florence_literature_dev", #use a different collection name for dev ingestion, so we don't mess with the main one while testing
     )

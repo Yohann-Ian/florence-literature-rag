@@ -25,9 +25,12 @@ CHROMA_DIR = os.path.join(
     "chroma_db"
 )
 
-EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
-COLLECTION_NAME = "florence_literature"
-PARENT_COLLECTION_NAME = "florence_literature_parents"
+EMBED_MODEL = "BAAI/bge-large-en-v1.5"
+# COLLECTION_NAME = "florence_literature"
+# PARENT_COLLECTION_NAME = "florence_literature_parents"
+COLLECTION_NAME = "florence_literature_dev" #use a different collection name for dev ingestion, so we don't mess with the main one while testing
+PARENT_COLLECTION_NAME = "florence_literature_dev_parents" #use a different collection name for dev ingestion, so we don't mess with the main one while testing
+
 
 
 # ── Shared resources — loaded once ─────────────────────────────────────────────
