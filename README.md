@@ -119,4 +119,4 @@ Then open `http://127.0.0.1:8000/docs` for the interactive API.
 
 ## Why this project
 
-It sits at the intersection of two things I care about: creating **AI/ML systems** (evaluation, observability, deployment - not just a notebook) and **literature** . Literature as a domain genuinely stresses the limits of current retrieval methods because meaning has many forms. One cannot simply mechanize it. It's worth looking into. The hard problems here: grounding against a corpus the model already knows, retrieving meaning that lives in subtext, are exactly the ones a generic technical-docs RAG never has to confront.
+It sits at the intersection of two things I care about: creating **AI/ML systems** (evaluation, observability, deployment - not just a notebook) and the greatest works of world **literature** . Literature as a domain genuinely stresses the limits of current retrieval methods because meaning has many forms. One cannot simply mechanize it. It's worth looking into. The hard problems here: grounding against a corpus the model already knows, retrieving meaning that lives in subtext, are exactly the ones a generic technical-docs RAG never has to confront.
