@@ -39,7 +39,7 @@ PARENT_COLLECTION_NAME = "florence_literature_dev_parents" #use a different coll
 print("[tools] Loading embedding model...")
 _embedding_model = HuggingFaceEmbeddings(
     model_name=EMBED_MODEL,
-    model_kwargs={"device": "cuda"},
+    model_kwargs={"device": "cpu"},
     encode_kwargs={"normalize_embeddings": True},
 )
 
