@@ -94,6 +94,17 @@ def _load_llm() -> ChatAnthropic:
     )
 
 
+def _load_grader_llm() -> ChatAnthropic:
+    """Fast, cheap model for yes/no relevance grading.
+    Haiku is plenty for a binary judgement and ~10x cheaper/faster than Opus."""
+    return ChatAnthropic(
+        model="claude-haiku-4-5-20251001",
+        anthropic_api_key=os.getenv("ANTHROPIC_API_KEY"),
+        max_tokens=10,        # only needs to say YES or NO
+        temperature=0.0,
+    )
+
+
 # ── Node 1: domain_router ──────────────────────────────────────────────────────
 
 def domain_router(state: AgentState) -> dict:
@@ -174,21 +185,22 @@ def retrieve(state: AgentState) -> dict:
 def grade_documents(state: AgentState) -> dict:
     """
     Grade each retrieved chunk for relevance to the query.
-    Uses Claude to make a binary relevant/not-relevant decision per chunk.
+    Runs all grading calls concurrently (thread pool) with a fast model.
 
     Writes: doc_grades, relevant_docs, retry_count
     """
+    from concurrent.futures import ThreadPoolExecutor
+
     query = state.get("rewritten_query") or state["query"]
     docs = state.get("retrieved_docs", [])
     retry_count = state.get("retry_count", 0)
 
-    print(f"\n[grade_documents] Grading {len(docs)} chunks...")
+    print(f"\n[grade_documents] Grading {len(docs)} chunks in parallel...")
 
-    llm = _load_llm()
-    grades = []
-    relevant_docs = []
+    llm = _load_grader_llm()
 
-    for i, doc in enumerate(docs):
+    def grade_one(doc: dict) -> bool:
+        """Grade a single chunk. Returns True if relevant."""
         grading_prompt = f"""You are grading whether a retrieved text chunk is relevant to a literary query.
 
 Query: {query}
@@ -198,16 +210,22 @@ Retrieved chunk (from {doc.get('title', 'unknown')} by {doc.get('author', 'unkno
 
 Is this chunk relevant to answering the query?
 Respond with only: YES or NO"""
+        try:
+            response = llm.invoke([HumanMessage(content=grading_prompt)])
+            return "YES" in response.content.upper()
+        except Exception as e:
+            print(f"[grade_documents] grading error: {e} — treating as not relevant")
+            return False
 
-        response = llm.invoke([HumanMessage(content=grading_prompt)])
-        grade = "YES" in response.content.upper()
-        grades.append(grade)
+    # Fire all grading calls concurrently
+    with ThreadPoolExecutor(max_workers=len(docs) or 1) as executor:
+        grades = list(executor.map(grade_one, docs))
 
-        if grade:
-            relevant_docs.append(doc)
-            print(f"  Chunk {i+1}: RELEVANT — {doc.get('title', 'unknown')}")
-        else:
-            print(f"  Chunk {i+1}: NOT RELEVANT — {doc.get('title', 'unknown')}")
+    relevant_docs = [doc for doc, keep in zip(docs, grades) if keep]
+
+    for i, (doc, keep) in enumerate(zip(docs, grades)):
+        status = "RELEVANT" if keep else "NOT RELEVANT"
+        print(f"  Chunk {i+1}: {status} — {doc.get('title', 'unknown')}")
 
     print(f"[grade_documents] {len(relevant_docs)}/{len(docs)} chunks passed grading.")
 
