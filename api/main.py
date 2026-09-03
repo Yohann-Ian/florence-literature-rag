@@ -40,6 +40,11 @@ from agent.graph import build_graph
 from api.schemas import QueryRequest, ResumeRequest, QueryResponse, Source
 
 
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+import os as _os_for_static
+
+
 # ── App setup ────────────────────────────────────────────────────────────────
 
 app = FastAPI(
@@ -62,6 +67,7 @@ app.add_middleware(
 print("[api] Building Florence agent graph...")
 _graph = build_graph()
 print("[api] Florence is open to visitors.")
+
 
 
 # ── Helper: turn final graph state into a response ───────────────────────────
@@ -95,55 +101,50 @@ def _state_to_response(state: dict, thread_id: str) -> QueryResponse:
 
 # ── Endpoints ────────────────────────────────────────────────────────────────
 
-@app.get("/")
+_STATIC_DIR = _os_for_static.path.join(_os_for_static.path.dirname(__file__), "static")
+app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
+
+@app.get("/", response_class=FileResponse)
+def index():
+    """Serve the frontend."""
+    return FileResponse(_os_for_static.path.join(_STATIC_DIR, "Indexproper.html"))
+
+@app.get("/health")
 def health_check():
     """Is Florence alive? Used by load balancers and uptime checks."""
     return {"status": "ok", "service": "Florence — Literature RAG Agent"}
 
 
+
+
 @app.post("/query", response_model=QueryResponse)
 def query(request: QueryRequest):
     """
-    Ask Florence a question.
-    Returns a complete answer, a rejection, or a paused state needing review.
+    Ask Florence a question. Returns one of:
+      - complete  → answer ready
+      - paused    → low confidence, awaiting human review (use /resume with thread_id)
+      - rejected  → query is outside Florence's domain
     """
     thread_id = str(uuid.uuid4())
     config = {"configurable": {"thread_id": thread_id}}
 
-    initial_state = {
-        "query": request.query,
-        "rewritten_query": None,
-        "retrieved_docs": [],
-        "doc_grades": [],
-        "relevant_docs": [],
-        "answer": None,
-        "sources": [],
-        "hallucination_score": 0.0,
-        "confidence": 0.0,
-        "domain_valid": False,
-        "retry_count": 0,
-        "generation_attempts": 0,
-        "trace_id": thread_id,
-        "error": None,
-    }
-
-    # Run the graph. It either completes or hits an interrupt() (HITL pause).
+    initial_state = {"query": request.query}
     result = _graph.invoke(initial_state, config=config)
 
-    # If the graph paused for human review, LangGraph leaves an interrupt marker.
-    # We detect that by checking the graph's state for pending interrupts.
+    # Did the graph pause for human review?
     snapshot = _graph.get_state(config)
-    if snapshot.next:  # there are pending nodes → the graph paused
+    if snapshot.next:  # pending nodes = paused
         return QueryResponse(
             status="paused",
             answer=result.get("answer"),
             confidence=result.get("confidence", 0.0),
             faithfulness=result.get("hallucination_score", 0.0),
             thread_id=thread_id,
-            reason="Low-confidence answer — human review requested.",
+            reason=result.get("hitl_reason", "Low-confidence answer — human review requested."),
         )
 
     return _state_to_response(result, thread_id)
+
 
 
 @app.post("/resume", response_model=QueryResponse)

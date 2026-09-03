@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Self-Built Retrieval Agent — Florence</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #0a0e14;
+    --paper: #f0ebe0;
+    --paper-dim: #d4cdbd;
+    --paper-soft: #a8a294;
+    --rule: #2a2f3a;
+    --rule-soft: #1a1f29;
+    --accent: #c89968;
+    --accent-soft: #7a5e3f;
+    --serif: 'Cormorant Garamond', Georgia, serif;
+    --sans: 'Inter', system-ui, sans-serif;
+    --mono: 'JetBrains Mono', ui-monospace, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--ink);
+    color: var(--paper);
+    font-family: var(--sans);
+    font-weight: 300;
+    line-height: 1.65;
+    font-size: 15px;
+    min-height: 100vh;
+    background-image:
+      radial-gradient(ellipse at 15% 0%, rgba(200, 153, 104, 0.05) 0%, transparent 55%),
+      radial-gradient(ellipse at 85% 100%, rgba(107, 155, 196, 0.035) 0%, transparent 55%);
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: 340px 1fr;
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 2rem 4rem;
+    gap: 3rem;
+  }
+  .side {
+    grid-column: 1; grid-row: 1;
+    padding-top: 2.5rem;
+    padding-right: 2rem;
+    border-right: 1px solid var(--rule);
+    font-size: 13.5px;
+    color: var(--paper-dim);
+    line-height: 1.7;
+  }
+  .main {
+    grid-column: 2; grid-row: 1;
+    min-width: 0;
+    padding-top: 3.5rem;
+  }
+  .side section { margin-bottom: 2.25rem; }
+  .side h2 {
+    font-family: var(--mono); font-size: 10.5px; font-weight: 500;
+    letter-spacing: 0.22em; text-transform: uppercase;
+    color: var(--accent); margin: 0 0 0.7rem;
+  }
+  .side p { margin: 0 0 0.85rem; }
+  .side strong { color: var(--paper); font-weight: 500; }
+  .side em { color: var(--paper-soft); font-style: italic; font-family: var(--serif); font-size: 14.5px; }
+  .step-list { list-style: none; padding: 0; margin: 0; counter-reset: step; }
+  .step-list li {
+    counter-increment: step;
+    padding: 0.35rem 0 0.35rem 1.75rem;
+    position: relative; font-size: 13px;
+  }
+  .step-list li::before {
+    content: counter(step, decimal-leading-zero);
+    position: absolute; left: 0;
+    font-family: var(--mono); font-size: 10px;
+    color: var(--accent); letter-spacing: 0.05em;
+  }
+  .skill-list { list-style: none; padding: 0; margin: 0; }
+  .skill-list li {
+    padding: 0.4rem 0; font-size: 12.5px;
+    color: var(--paper-dim);
+    border-bottom: 1px solid var(--rule-soft);
+  }
+  .skill-list li:last-child { border-bottom: none; }
+  .skill-list li .k { color: var(--paper); font-weight: 500; }
+
+  .masthead { border-bottom: 1px solid var(--rule); padding-bottom: 1.25rem; margin-bottom: 2rem; }
+  .eyebrow {
+    font-family: var(--mono); font-size: 10.5px;
+    letter-spacing: 0.22em; text-transform: uppercase;
+    color: var(--accent); margin-bottom: 0.85rem;
+  }
+  .eyebrow .deleted {
+    text-decoration: line-through;
+    text-decoration-color: var(--accent);
+    color: var(--paper-soft);
+  }
+  h1 {
+    font-family: var(--serif); font-weight: 500;
+    font-size: 2.85rem; line-height: 1.05;
+    letter-spacing: -0.01em; margin: 0 0 0.6rem;
+    color: var(--paper);
+  }
+  .byline {
+    font-family: var(--mono); font-size: 11px;
+    letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--paper-soft);
+  }
+  .intro {
+    font-family: var(--serif); font-size: 1.35rem;
+    line-height: 1.45; color: var(--paper-dim);
+    margin: 0 0 1.5rem;
+  }
+  .intro em { color: var(--accent); font-style: italic; }
+  .corpus-note {
+    font-size: 13px; color: var(--paper-soft);
+    border-left: 2px solid var(--accent-soft);
+    padding: 0.1rem 0 0.1rem 0.9rem;
+    margin: 0 0 2.25rem;
+  }
+  .corpus-note strong { color: var(--paper-dim); font-weight: 500; }
+
+  .input-wrap { margin-bottom: 1.25rem; }
+  .input-label {
+    font-family: var(--mono); font-size: 10.5px;
+    letter-spacing: 0.2em; text-transform: uppercase;
+    color: var(--paper-soft); display: block;
+    margin-bottom: 0.6rem;
+  }
+  textarea#question {
+    width: 100%; min-height: 110px;
+    background: rgba(255,255,255,0.02);
+    color: var(--paper);
+    border: 1px solid var(--rule); border-radius: 2px;
+    padding: 1rem 1.1rem;
+    font-family: var(--serif); font-size: 1.15rem;
+    line-height: 1.5; resize: vertical;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  textarea#question:focus {
+    outline: none; border-color: var(--accent-soft);
+    background: rgba(200, 153, 104, 0.04);
+  }
+  .submit-row {
+    display: flex; align-items: center;
+    justify-content: space-between;
+    margin-top: 0.85rem; gap: 1rem; flex-wrap: wrap;
+  }
+  button.submit {
+    background: transparent; color: var(--paper);
+    border: 1px solid var(--paper-soft);
+    border-radius: 2px; padding: 0.65rem 1.4rem;
+    font-family: var(--mono); font-size: 11px;
+    letter-spacing: 0.18em; text-transform: uppercase;
+    cursor: pointer; transition: all 0.15s;
+  }
+  button.submit:hover { border-color: var(--accent); color: var(--accent); }
+  button.submit:disabled { opacity: 0.4; cursor: not-allowed; }
+  .hint {
+    font-family: var(--mono); font-size: 10.5px;
+    color: var(--paper-soft); letter-spacing: 0.05em;
+  }
+
+  .examples {
+    margin-top: 1.5rem; padding-top: 1.25rem;
+    border-top: 1px dashed var(--rule);
+  }
+  .examples-label {
+    font-family: var(--mono); font-size: 10.5px;
+    letter-spacing: 0.2em; text-transform: uppercase;
+    color: var(--paper-soft); margin-bottom: 0.85rem;
+  }
+  .examples-list { list-style: none; padding: 0; margin: 0; }
+  .examples-list li {
+    display: flex; align-items: flex-start;
+    justify-content: space-between; gap: 1rem;
+    padding: 0.65rem 0;
+    border-bottom: 1px solid var(--rule-soft);
+  }
+  .examples-list li:last-child { border-bottom: none; }
+  .ex-q {
+    font-family: var(--serif); font-size: 1.02rem;
+    line-height: 1.4; color: var(--paper-dim); flex: 1;
+  }
+  .ex-use {
+    background: transparent; color: var(--paper-soft);
+    border: 1px solid var(--rule); border-radius: 2px;
+    padding: 0.3rem 0.7rem;
+    font-family: var(--mono); font-size: 9.5px;
+    letter-spacing: 0.15em; text-transform: uppercase;
+    cursor: pointer; flex-shrink: 0; transition: all 0.15s;
+  }
+  .ex-use:hover { border-color: var(--accent); color: var(--accent); }
+
+  .state { margin-top: 2.5rem; }
+  .state[hidden] { display: none; }
+  .loading {
+    font-family: var(--mono); font-size: 11.5px;
+    letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--accent); padding: 1.25rem 0;
+    border-top: 1px solid var(--rule);
+    border-bottom: 1px solid var(--rule);
+  }
+  .loading-dot {
+    display: inline-block; width: 6px; height: 6px;
+    background: var(--accent); border-radius: 50%;
+    margin-right: 8px;
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100% { opacity: 0.25; } 50% { opacity: 1; } }
+  .pause-banner {
+    background: rgba(200, 153, 104, 0.06);
+    border: 1px solid var(--accent-soft);
+    padding: 1rem 1.25rem; margin-bottom: 1.5rem;
+    border-radius: 2px;
+  }
+  .pause-banner .label {
+    font-family: var(--mono); font-size: 10.5px;
+    letter-spacing: 0.18em; text-transform: uppercase;
+    color: var(--accent); margin-bottom: 0.3rem;
+  }
+  .pause-banner .desc {
+    font-family: var(--serif); font-size: 1.05rem;
+    color: var(--paper-dim); margin: 0 0 0.85rem;
+    font-style: italic;
+  }
+  .pause-actions { display: flex; gap: 0.6rem; }
+  .pause-actions button {
+    background: transparent; color: var(--paper);
+    border: 1px solid var(--paper-soft); border-radius: 2px;
+    padding: 0.5rem 1rem;
+    font-family: var(--mono); font-size: 10.5px;
+    letter-spacing: 0.15em; text-transform: uppercase;
+    cursor: pointer;
+  }
+  .pause-actions button:hover { border-color: var(--accent); color: var(--accent); }
+  #reject-feedback {
+    width: 100%; min-height: 70px; margin-top: 0.75rem;
+    background: rgba(255,255,255,0.02); color: var(--paper);
+    border: 1px solid var(--rule); border-radius: 2px;
+    padding: 0.65rem 0.85rem;
+    font-family: var(--serif); font-size: 1rem;
+    line-height: 1.45; resize: vertical;
+  }
+  .answer {
+    font-family: var(--serif); font-size: 1.18rem;
+    line-height: 1.65; color: var(--paper);
+  }
+  .answer h1, .answer h2, .answer h3 {
+    font-family: var(--serif); font-weight: 500;
+    color: var(--paper);
+    margin-top: 1.5rem; margin-bottom: 0.5rem;
+  }
+  .answer h1 { font-size: 1.55rem; }
+  .answer h2 { font-size: 1.3rem; }
+  .answer h3 { font-size: 1.15rem; color: var(--accent); }
+  .answer p { margin: 0 0 1rem; }
+  .answer strong { color: var(--accent); font-weight: 500; }
+  .answer em { font-style: italic; color: var(--paper-dim); }
+  .answer hr { border: none; border-top: 1px solid var(--rule); margin: 1.25rem 0; }
+  .scores {
+    display: flex; gap: 1.75rem;
+    margin-top: 1.5rem; padding-top: 1rem;
+    border-top: 1px solid var(--rule);
+  }
+  .score-item {
+    font-family: var(--mono); font-size: 10.5px;
+    letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--paper-soft);
+  }
+  .score-item .v { color: var(--paper); margin-left: 0.5rem; font-size: 13px; letter-spacing: 0; }
+  .sources {
+    margin-top: 2rem; padding-top: 1.25rem;
+    border-top: 1px solid var(--rule);
+  }
+  .sources-label {
+    font-family: var(--mono); font-size: 10.5px;
+    letter-spacing: 0.2em; text-transform: uppercase;
+    color: var(--accent); margin-bottom: 0.85rem;
+  }
+  .source-item {
+    font-family: var(--serif); font-size: 0.98rem;
+    color: var(--paper-dim); padding: 0.6rem 0;
+    border-bottom: 1px solid var(--rule-soft);
+  }
+  .source-item:last-child { border-bottom: none; }
+  .source-item .meta {
+    font-family: var(--mono); font-size: 10px;
+    letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--paper-soft); margin-bottom: 0.2rem;
+  }
+  .error {
+    font-family: var(--mono); font-size: 12px;
+    color: #c87a7a; border: 1px solid #5a3030;
+    padding: 0.85rem 1rem;
+    background: rgba(200, 100, 100, 0.04);
+  }
+  @media (max-width: 720px) {
+    .grid { grid-template-columns: 1fr; gap: 2rem; padding: 2rem 1.25rem; }
+    .side { grid-column: 1; grid-row: 2; padding-right: 0; padding-top: 2rem; border-right: none; border-top: 1px solid var(--rule); }
+    .main { grid-column: 1; grid-row: 1; padding-top: 1rem; }
+    h1 { font-size: 2.1rem; }
+    .intro { font-size: 1.15rem; }
+  }
+</style>
+</head>
+<body>
+  <div class="grid">
+
+    <aside class="side">
+      <section>
+        <h2>The name</h2>
+        <p>Florence is named for the city where the Renaissance ignited, a beacon of the civilisation's enlightenment, where the recovery of ancient texts and the invention of new ones changed how humans read and reasoned.</p>
+      </section>
+      <section>
+        <h2>What this does</h2>
+        <p>Florence is a Retrieval-Augmented Generation system. Given a question, she:</p>
+        <ol class="step-list">
+          <li>Checks the question is within her domain.</li>
+          <li>Searches the indexed corpus for relevant passages.</li>
+          <li>Grades each passage for relevance.</li>
+          <li>Rewrites and retries if the search was weak.</li>
+          <li>Generates an answer from the surviving passages.</li>
+          <li>Self-checks the answer against the sources.</li>
+          <li>Escalates to a human if confidence is low.</li>
+        </ol>
+      </section>
+      <section>
+        <h2>How is this different from Claude or ChatGPT?</h2>
+        <p>I built this one myself. Chunking and embedding happen locally. The only times external LLMs are used are when I call on their APIs for interpretation of the chunks, presentation of language, and evaluation of faithfulness. The chunk retrieval, the agent orchestration, the retry loops, the human-in-the-loop mechanism, and the confidence grading are all handled with my code.</p>
+        <p>Florence was built from scratch, locally, then containerised and ported to AWS. The chat interface is the smallest visible part of a much larger machine.</p>
+      </section>
+      <section>
+        <h2>Skills demonstrated</h2>
+        <ul class="skill-list">
+          <li><span class="k">LangGraph</span>: agentic orchestration with retry loops and HITL</li>
+          <li><span class="k">FastAPI + Pydantic</span>: typed web service</li>
+          <li><span class="k">Docker + AWS ECS</span>: containerisation and deployment</li>
+          <li><span class="k">Ragas</span>: reference-free evaluation</li>
+          <li><span class="k">ChromaDB + BGE</span>: vector retrieval</li>
+          <li><span class="k">Claude (Opus + Haiku)</span>: multi-model orchestration</li>
+        </ul>
+      </section>
+    </aside>
+
+    <main class="main">
+      <header class="masthead">
+        <div class="eyebrow">Self-Built Retrieval Agent </div>
+        <h1>Florence</h1>
+        <div class="byline">By Yohann Ian &nbsp;·&nbsp; AI / ML Engineer</div>
+      </header>
+
+      <p class="intro">Welcome. You are previewing a <em>self-built</em> retrieval-augmented generation agent, an interpreter that reads, retrieves, reasons, and answers from a closed corpus of comparative literature.</p>
+
+      <p class="corpus-note"><strong>Currently indexed:</strong> Orwell's <em>Nineteen Eighty-Four</em> and Huxley's <em>Brave New World</em>. Ask anything of either book (themes, characters, mechanisms of control, the relationship between them) and Florence will answer from the texts themselves, not from memory.</p>
+
+      <div class="input-wrap">
+        <label class="input-label" for="question">Ask of the books</label>
+        <textarea id="question">How does the Party in Nineteen Eighty-Four control what people think?</textarea>
+        <div class="submit-row">
+          <span class="hint">First query may take ~30 seconds. The agent is thinking, not stuck.</span>
+          <button class="submit" id="submit-btn">Submit ↗</button>
+        </div>
+
+        <div class="examples">
+          <div class="examples-label">Try one of these</div>
+          <ul class="examples-list">
+            <li><span class="ex-q">Compare the mechanisms of control in Nineteen Eighty-Four and Brave New World.</span><button class="ex-use" data-q="Compare the mechanisms of control in Nineteen Eighty-Four and Brave New World.">Use ↗</button></li>
+            <li><span class="ex-q">What role does language play in shaping thought in Nineteen Eighty-Four?</span><button class="ex-use" data-q="What role does language play in shaping thought in Nineteen Eighty-Four?">Use ↗</button></li>
+            <li><span class="ex-q">How does soma function as a tool of social stability in Brave New World?</span><button class="ex-use" data-q="How does soma function as a tool of social stability in Brave New World?">Use ↗</button></li>
+            <li><span class="ex-q">What is Winston Smith's relationship to truth, and how does it change?</span><button class="ex-use" data-q="What is Winston Smith's relationship to truth, and how does it change?">Use ↗</button></li>
+            <li><span class="ex-q">Which dystopia does Florence find more terrifying (Orwell's or Huxley's) and why?</span><button class="ex-use" data-q="Which dystopia does Florence find more terrifying — Orwell's or Huxley's — and why?">Use ↗</button></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="state" id="loading-state" hidden>
+        <div class="loading"><span class="loading-dot"></span>Florence is reading...</div>
+      </div>
+
+      <div class="state" id="paused-state" hidden>
+        <div class="pause-banner">
+          <div class="label">Low confidence · review requested</div>
+          <p class="desc" id="pause-reason">Florence is not confident in this answer and is asking for human review.</p>
+          <div class="pause-actions">
+            <button id="approve-btn">Approve & return</button>
+            <button id="reject-btn">Reject — try again</button>
+          </div>
+          <textarea id="reject-feedback" placeholder="(Optional) Tell Florence what was wrong, or what angle to take instead..." hidden></textarea>
+        </div>
+        <div id="paused-preview"></div>
+      </div>
+
+      <div class="state" id="answer-state" hidden>
+        <div class="answer" id="answer-body"></div>
+        <div class="scores" id="scores"></div>
+        <div class="sources" id="sources" hidden>
+          <div class="sources-label">Sources</div>
+          <div id="sources-list"></div>
+        </div>
+      </div>
+
+      <div class="state" id="error-state" hidden>
+        <div class="error" id="error-body"></div>
+      </div>
+    </main>
+
+  </div>
+
+<script>
+  const API = window.location.origin;
+  const $q = document.getElementById('question');
+  const $submit = document.getElementById('submit-btn');
+  const $loading = document.getElementById('loading-state');
+  const $paused = document.getElementById('paused-state');
+  const $pausePreview = document.getElementById('paused-preview');
+  const $pauseReason = document.getElementById('pause-reason');
+  const $answer = document.getElementById('answer-state');
+  const $answerBody = document.getElementById('answer-body');
+  const $scores = document.getElementById('scores');
+  const $sources = document.getElementById('sources');
+  const $sourcesList = document.getElementById('sources-list');
+  const $error = document.getElementById('error-state');
+  const $errorBody = document.getElementById('error-body');
+  const $approve = document.getElementById('approve-btn');
+  const $reject = document.getElementById('reject-btn');
+  const $feedback = document.getElementById('reject-feedback');
+
+  let currentThreadId = null;
+
+  function hideAll() {
+    $loading.hidden = true; $paused.hidden = true;
+    $answer.hidden = true; $error.hidden = true;
+  }
+  function escapeHtml(s) {
+    return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+  function mdToHtml(md) {
+    if (!md) return '';
+    let html = escapeHtml(md);
+    html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+    html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+    html = html.replace(/^# (.+)$/gm, '<h2>$1</h2>');
+    html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+    html = html.replace(/---+/g, '<hr>');
+    const paras = html.split(/\n\n+/).map(p => p.trim()).filter(Boolean);
+    return paras.map(p => p.startsWith('<h') || p.startsWith('<hr') ? p : '<p>' + p.replace(/\n/g, ' ') + '</p>').join('\n');
+  }
+  function renderAnswer(data) {
+    $answerBody.innerHTML = mdToHtml(data.answer);
+    $scores.innerHTML = '';
+    if (typeof data.confidence === 'number') $scores.innerHTML += '<div class="score-item">Confidence<span class="v">' + data.confidence.toFixed(2) + '</span></div>';
+    if (typeof data.faithfulness === 'number') $scores.innerHTML += '<div class="score-item">Faithfulness<span class="v">' + data.faithfulness.toFixed(2) + '</span></div>';
+    if (Array.isArray(data.sources) && data.sources.length) {
+      $sources.hidden = false;
+      $sourcesList.innerHTML = data.sources.map(s =>
+        '<div class="source-item"><div class="meta">' + escapeHtml(s.document) + ' &nbsp;·&nbsp; ' + escapeHtml(s.author) + '</div>' + escapeHtml(s.excerpt) + '…</div>'
+      ).join('');
+    } else { $sources.hidden = true; }
+  }
+  async function submit() {
+    const query = $q.value.trim();
+    if (!query) return;
+    hideAll();
+    $loading.hidden = false;
+    $submit.disabled = true;
+    currentThreadId = null;
+    try {
+      const res = await fetch(API + '/query', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query })
+      });
+      if (!res.ok) throw new Error('Server returned ' + res.status);
+      const data = await res.json();
+      hideAll();
+      if (data.status === 'rejected') {
+        $error.hidden = false; $errorBody.textContent = data.reason || 'Query rejected.';
+      } else if (data.status === 'paused') {
+        currentThreadId = data.thread_id;
+        $pauseReason.textContent = data.reason || 'Low confidence — human review requested.';
+        $pausePreview.innerHTML = '<div class="answer">' + mdToHtml(data.answer) + '</div>';
+        $paused.hidden = false;
+      } else {
+        renderAnswer(data); $answer.hidden = false;
+      }
+    } catch (err) {
+      hideAll(); $error.hidden = false;
+      $errorBody.textContent = 'Something went wrong: ' + err.message;
+    } finally { $submit.disabled = false; }
+  }
+  async function resume(decision) {
+    if (!currentThreadId) return;
+    hideAll(); $loading.hidden = false;
+    try {
+      const res = await fetch(API + '/resume', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ thread_id: currentThreadId, decision })
+      });
+      if (!res.ok) throw new Error('Server returned ' + res.status);
+      const data = await res.json();
+      hideAll(); renderAnswer(data); $answer.hidden = false;
+    } catch (err) {
+      hideAll(); $error.hidden = false;
+      $errorBody.textContent = 'Resume failed: ' + err.message;
+    }
+  }
+  $submit.addEventListener('click', submit);
+  $q.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submit(); });
+  $approve.addEventListener('click', () => resume('approve'));
+  $reject.addEventListener('click', () => {
+    if ($feedback.hidden) {
+      $feedback.hidden = false;
+      $reject.textContent = 'Submit rejection ↗';
+      $feedback.focus();
+      return;
+    }
+    const fb = $feedback.value.trim() || 'rewrite from a different angle';
+    $feedback.hidden = true; $feedback.value = '';
+    $reject.textContent = 'Reject — try again';
+    resume(fb);
+  });
+  document.querySelectorAll('.ex-use').forEach(btn => {
+    btn.addEventListener('click', () => {
+      $q.value = btn.dataset.q;
+      $q.focus();
+      $q.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+  });
+</script>
+</body>
+</html>

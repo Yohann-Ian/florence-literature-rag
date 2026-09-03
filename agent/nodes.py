@@ -57,19 +57,7 @@ TOP_K = int(os.getenv("TOP_K", "5"))
 CONFIDENCE_THRESHOLD = 0.7
 HALLUCINATION_THRESHOLD = 0.7
 
-# Literary domain keywords — used for lightweight domain checking
-LITERARY_KEYWORDS = [
-    "novel", "book", "author", "character", "theme", "narrative",
-    "plot", "prose", "poem", "poetry", "epic", "tragedy", "symbol",
-    "metaphor", "motif", "aeneid", "paradise lost", "milton", "virgil",
-    "dostoyevsky", "tolstoy", "hemingway", "orwell", "huxley", "morrison",
-    "steinbeck", "bulgakov", "raskolnikov", "winston", "anna karenina",
-    "beloved", "nineteen eighty", "brave new world", "east of eden",
-    "master and margarita", "farewell to arms", "crime and punishment",
-    "nabokov", "forster", "guilt", "redemption", "duty", "empire",
-    "satan", "aeneas", "dystopia", "totalitarian", "war", "love",
-    "death", "suffering", "freedom", "soul", "god", "evil", "fate",
-]
+
 
 def _load_embedding_model() -> HuggingFaceEmbeddings:
     """Load the embedding model once and cache it."""
@@ -87,9 +75,9 @@ def _load_chroma_collection() -> chromadb.Collection:
 def _load_llm() -> ChatAnthropic:
     """Load the Anthropic Claude model."""
     return ChatAnthropic(
-        model="claude-opus-4-5",
+        model="claude-sonnet-4-6",
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY"),
-        max_tokens=2048,
+        max_tokens=4096,
         temperature=0.3,
     )
 
@@ -110,12 +98,13 @@ def _load_grader_llm() -> ChatAnthropic:
 def domain_router(state: AgentState) -> dict:
     """
     Check whether the query is within Florence's literary domain.
-    Also checks for prompt injection attempts.
+    Uses Haiku as a fast, cheap classifier — judgement, not keyword matching.
+
+    Also checks for prompt injection.
 
     Writes: domain_valid, error
     """
     query = state["query"]
-
     print(f"\n[domain_router] Query: {query[:80]}...")
 
     # Check for prompt injection first
@@ -126,23 +115,38 @@ def domain_router(state: AgentState) -> dict:
             "error": "Query rejected: prompt injection detected.",
         }
 
-    # Lightweight domain check — does the query mention literary topics?
-    query_lower = query.lower()
-    keyword_match = any(kw in query_lower for kw in LITERARY_KEYWORDS)
+    llm = _load_grader_llm()  # the Haiku grader we set up for chunk grading
 
-    # Also check query length — very short queries are often out of domain
-    long_enough = len(query.split()) >= 4
+    routing_prompt = f"""You are a domain gate for a literature question-answering system called Florence.
 
-    domain_valid = keyword_match and long_enough
+Florence answers questions about a specific corpus of literary works:
+- Nineteen Eighty-Four (1984) by George Orwell
+- Brave New World by Aldous Huxley
 
-    if not domain_valid:
-        print("[domain_router] Query appears out of literary domain — rejecting.")
+A query is IN DOMAIN if it could plausibly be answered using these books — including their themes, characters, plots, style, historical context, or comparisons between them. Be generous: shorthand titles ("1984", "BNW"), character names, factional names ("the Party", "soma"), or thematic questions ("how does totalitarianism work in fiction") are all valid.
+
+A query is OUT OF DOMAIN if it's about programming, weather, math, current events, personal advice, or any topic clearly outside literature.
+
+Query: "{query}"
+
+Respond with only: YES (in domain) or NO (out of domain)."""
+
+    try:
+        response = llm.invoke([HumanMessage(content=routing_prompt)])
+        decision = response.content.strip().upper()
+        in_domain = "YES" in decision
+    except Exception as e:
+        print(f"[domain_router] router error: {e} — defaulting to in-domain")
+        in_domain = True  # fail open: better to attempt than wrongly reject
+
+    if not in_domain:
+        print("[domain_router] Query out of literary domain — rejecting.")
         return {
             "domain_valid": False,
             "error": "Query is outside Florence's domain. Please ask about the literary corpus.",
         }
 
-    print("[domain_router] Query is valid — proceeding to retrieval.")
+    print("[domain_router] Query is in domain — proceeding to retrieval.")
     return {
         "domain_valid": True,
         "error": None,
@@ -156,7 +160,6 @@ def domain_router(state: AgentState) -> dict:
         "hallucination_score": 0.0,
         "confidence": 0.0,
     }
-
 
 # ── Node 2: retrieve ───────────────────────────────────────────────────────────
 
@@ -320,6 +323,11 @@ def generate(state: AgentState) -> dict:
             "relevance_score": doc.get("distance", 0.0),
         })
 
+    feedback = state.get("user_feedback")
+    feedback_block = ""
+    if feedback:
+        feedback_block = f"\n\nThe previous answer was rejected by a human reviewer with this feedback: \"{feedback}\". Take this seriously and write a different answer that addresses the concern."
+
     system_prompt = """You are Florence, a literary analysis agent specialising in comparative literature.
 You have access to a corpus of twelve major literary works spanning antiquity to the twentieth century.
 
@@ -333,7 +341,10 @@ Rules:
 - Cite specific passages or details from the sources
 - Acknowledge genuine ambiguity — do not collapse tensions the texts preserve
 - If the context is insufficient to answer fully, say so clearly
-- Write in clear, precise prose — not bullet points"""
+- Write in clear, precise prose — not bullet points
+
+
+"""
 
     user_prompt = f"""Using the following passages from the literary corpus, answer this question:
 
@@ -343,7 +354,11 @@ CORPUS PASSAGES:
 {context}
 
 Provide a thoughtful, well-supported answer. Reference specific details from the passages.
-End your answer with a brief note on which sources were most relevant."""
+End your answer with a brief note on which sources were most relevant.
+
+You will sometimes find the presence of feedback. In which case, you'll have to incorporate it in the generation. THE FEEDBACK: : {feedback_block} 
+
+"""
 
     llm = _load_llm()
     response = llm.invoke([
@@ -456,37 +471,51 @@ def hitl_checkpoint(state: AgentState) -> dict:
     """
     Human-in-the-loop checkpoint.
     If confidence is below threshold, pause and wait for human review.
-    Uses LangGraph's interrupt() to pause execution mid-graph.
 
-    If confidence is high enough, passes through without interrupting.
+    Human can:
+      - approve  → accept the current answer
+      - <text>   → reject with feedback; the graph loops back to generate
+                   with the feedback included in the next prompt
+
+    Capped at MAX_REJECTIONS (3) attempts to prevent infinite loops.
     """
     confidence = state.get("confidence", 0.0)
     answer = state.get("answer", "")
     query = state["query"]
+    rejection_count = state.get("rejection_count", 0)
 
     print(f"\n[hitl_checkpoint] Confidence: {confidence:.2f} (threshold: {CONFIDENCE_THRESHOLD})")
+
+    # Cap rejections — after too many tries, force-pass the latest answer
+    MAX_REJECTIONS = 3
+    if rejection_count >= MAX_REJECTIONS:
+        print(f"[hitl_checkpoint] Max rejections ({MAX_REJECTIONS}) reached — forcing pass.")
+        return {"confidence": CONFIDENCE_THRESHOLD}
 
     if confidence < CONFIDENCE_THRESHOLD:
         print("[hitl_checkpoint] Low confidence — requesting human review...")
 
-        # interrupt() pauses the graph here.
-        # The value passed to interrupt() is shown to the human reviewer.
-        # When the human resumes the graph, execution continues from this point.
         human_decision = interrupt({
             "reason": "Low confidence answer requires human review",
             "query": query,
             "answer": answer,
             "confidence": confidence,
-            "instruction": "Review the answer above. Type 'approve' to send it, or provide a corrected answer.",
+            "instruction": "Type 'approve' to accept, or describe what was wrong so Florence can try again.",
         })
 
-        # If human provided a corrected answer, use it
-        if isinstance(human_decision, str) and human_decision.lower() != "approve":
-            print("[hitl_checkpoint] Human provided corrected answer.")
-            return {"answer": human_decision, "confidence": 1.0}
+        if isinstance(human_decision, str) and human_decision.strip().lower() == "approve":
+            print("[hitl_checkpoint] Human approved the answer.")
+            return {"confidence": CONFIDENCE_THRESHOLD}
 
-        print("[hitl_checkpoint] Human approved the answer.")
-        return {"confidence": CONFIDENCE_THRESHOLD}
+        # Any non-"approve" response is treated as rejection-with-feedback.
+        # The graph routes back to `generate`, which sees user_feedback in state.
+        feedback = human_decision if isinstance(human_decision, str) else "rewrite from a different angle"
+        print(f"[hitl_checkpoint] Human rejected with feedback. Looping back to generate (attempt {rejection_count + 1}).")
+        return {
+            "user_feedback": feedback,
+            "answer": None,
+            "rejection_count": rejection_count + 1,
+        }
 
     print("[hitl_checkpoint] Confidence sufficient — passing through.")
     return {}
