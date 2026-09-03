@@ -1,122 +1,221 @@
-# Florence - Literature RAG Agent
+# Florence
 
-Florence is a production-style **agentic Retrieval-Augmented Generation (RAG)** system that answers interpretive questions about a curated corpus of comparative literature. It is built to be *grounded* - it answers from the texts it has, refuses questions outside its domain, and measures its own faithfulness rather than trusting that retrieval worked.
+A retrieval-augmented generation (RAG) agent that answers questions about a small corpus of literary works. Built with LangGraph, ChromaDB, and the Anthropic API. Deployed as a containerised FastAPI service.
 
-The project is as much about **evaluation and honest failure analysis** as it is about the agent itself. A working RAG demo is easy; knowing *how well* it works, *where* it breaks, and *why* is the harder and more interesting problem.
+**Currently indexed:** *Nineteen Eighty-Four* (George Orwell), *Brave New World* (Aldous Huxley). Initial corpus had more books, but I constrained it to two books for my personal demo, so it was more managable.
+
+**UI preview (static, no backend):** [florence-ui-preview.netlify.app](https://florence-ui-preview.netlify.app/)
+
+The UI preview lets you click through the interface as it was designed, but there is no live agent behind it. To run Florence against the corpus, clone and follow the quick start below.
 
 ---
 
-## What it does
+## What Florence does
 
-- Accepts any natural-language question, but only **answers from its corpus** - out-of-domain questions are rejected by a domain router.
-- Runs an **agentic retrieval loop**: retrieve → grade relevance → rewrite-and-retry if results are weak → generate → self-check for hallucination → escalate to human review when confidence is low.
-- Exposes a **FastAPI** service with a human-in-the-loop (HITL) pause/resume flow that works over stateless HTTP.
-- Ships as a **Docker** image with the embedding model and vector index baked in, ready to deploy.
+Given a literary question, Florence:
+
+1. Checks whether the question is within her domain (Haiku classifier + prompt-injection filter).
+2. Retrieves the top-5 most relevant child chunks from a local ChromaDB vector store.
+3. Grades each chunk for relevance in parallel (five concurrent Haiku calls).
+4. If fewer than 2 chunks pass, rewrites the query (Sonnet) and retries retrieval, capped at 2 rewrites.
+5. Generates an answer grounded in the surviving chunks (Sonnet).
+6. Audits the answer against those chunks using LLM-as-judge, producing faithfulness and confidence scores.
+7. If confidence is low, pauses the graph and asks a human to approve or reject with feedback. Human rejection re-triggers generation with feedback injected into the prompt, capped at 3 rejections.
+
+The pipeline is implemented as a LangGraph state machine with a MemorySaver checkpointer so the human-in-the-loop pause can survive stateless HTTP requests.
+
+---
+
+## Quick start
+
+**Requirements:** Python 3.12, ~5 GB free disk (for the BGE embedding model + ChromaDB index), an Anthropic API key.
+
+```bash
+git clone https://github.com/Yohann-Ian/florence-literature-rag.git
+cd florence-literature-rag
+
+python -m venv venv
+source venv/bin/activate  # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+
+# Set your API key
+cp .env.example .env
+# Edit .env and add: ANTHROPIC_API_KEY=sk-ant-...
+
+# Build the ChromaDB index (one-time, ~10 minutes on GPU, ~30 on CPU)
+python ingestion/embed_index.py
+
+# Run the API
+python -u -m uvicorn api.main:app --port 8000 --log-level info
+```
+
+Then open `http://127.0.0.1:8000/` in a browser.
+
+To run the evaluation harness:
+
+```bash
+python evaluation/ragas_eval.py
+```
+
+Results are printed to the terminal and written as an HTML report in `evaluation/reports/`.
 
 ---
 
 ## Architecture
 
-```
-Query
-  │
-  ▼
-domain_router ──(out of domain)──► reject
-  │ (valid)
-  ▼
-retrieve ◄──────────────┐
-  │                     │
-  ▼                     │
-grade_documents ──(too few relevant)──► rewrite_query ──┘  (max 2 retries)
-  │ (enough)
-  ▼
-generate
-  │
-  ▼
-check_hallucination ──(ungrounded)──► regenerate (once)
-  │ (grounded)
-  ▼
-hitl_checkpoint ──(low confidence)──► pause for human review
-  │ (confident)
-  ▼
-Answer
-```
+### Ingestion (offline, one-time)
 
-The agent is built as a **LangGraph state machine** - a cyclic graph rather than a linear pipeline, which is what makes the retry loops and the human-in-the-loop pause possible.
+Books are parsed from EPUB or PDF (EbookLib for EPUB, PyMuPDF for PDF), cleaned to strip Gutenberg boilerplate and normalise whitespace, then chunked hierarchically:
 
-### Stack
+- **Parent chunks:** 1024 characters, 128-character overlap
+- **Child chunks:** 256 characters, 32-character overlap
 
-| Layer | Choice |
-|---|---|
-| Agent orchestration | LangGraph |
-| LLM | Anthropic Claude |
-| Embeddings | BAAI/bge-large-en-v1.5 (local, CPU at serve time) |
-| Vector store | ChromaDB |
-| Evaluation | Ragas (faithfulness, answer relevancy, context precision) |
-| Serving | FastAPI + Uvicorn |
-| Packaging | Docker |
+Each child stores a metadata pointer back to its parent. Retrieval hits children (for search precision), then fetches the corresponding parent (for LLM context).
 
----
+Chunks are embedded using `BAAI/bge-large-en-v1.5` (1024-dimensional) and stored in two persistent ChromaDB collections (one for children, one for parents) using cosine similarity with HNSW indexing.
 
-## The corpus
+### Agent (per-request state machine)
 
-Twelve works, chosen around a single question - *what does civilisation do to the human soul?*
+Implemented in LangGraph. State is a `TypedDict` with fields for query, retrieved docs, grades, answer, scores, confidence, and human feedback. Routing between nodes is conditional on signal constants (`SUFFICIENT`, `INSUFFICIENT`, `EXHAUSTED`, `GROUNDED`, `UNGROUNDED`, `UNGROUNDED_FINAL`).
 
-**Primary texts:** The Aeneid · Paradise Lost · Crime and Punishment · Anna Karenina · The Master and Margarita · A Farewell to Arms · Nineteen Eighty-Four · Brave New World · East of Eden · Beloved
+Model choice per node:
 
-**Critical texts:** Nabokov, *Lectures on Russian Literature* · Forster, *Aspects of the Novel*
-
-The corpus is **closed by design**. Florence answers about *these* texts, deeply, rather than ingesting arbitrary uploads. This is a deliberate trade-off: a fixed corpus is what makes rigorous, repeatable evaluation possible. Live user ingestion would sacrifice the stable evaluation set that the whole project is built around.
-
----
-
-## Evaluation & findings
-
-Florence is evaluated against a hand-built gold set of 20 questions (17 answerable across single-text, cross-text-thematic, and cross-text-craft tiers; 3 adversarial). Scoring uses three **reference-free** Ragas metrics so results don't depend on model-drafted reference answers.
-
-A few findings the evaluation surfaced - included here because the failures are more instructive than the successes:
-
-**1. Retrieval quality is the dominant lever.** Swapping the embedding model from `all-MiniLM-L6-v2` (384-dim) to `BGE-large` (1024-dim) moved context precision on key questions from `0.00` to `1.00`, with fewer query rewrites needed. The bottleneck was never generation - it was retrieval pulling the wrong passages.
-
-**2. A famous corpus is a hard case for grounding.** Because the underlying LLM knows these canonical texts well, it tends to answer from parametric knowledge rather than from retrieved chunks - producing answers that are *correct about the book* but *unfaithful to the sources*. The hallucination-check node exists to catch exactly this, and it does: low-faithfulness answers are flagged and escalated rather than shipped.
-
-**3. Embeddings reward explicitness - which disadvantages some literature.** Orwell states his themes in plain expository prose, so passages about "control" retrieve reliably. Huxley conveys the same themes through irony and sensory imagery - meaning that lives in interpretation, not in the words - and retrieves poorly for the same query. Dense retrieval matches on semantic surface, not interpreted meaning. In a literary corpus this is not a bug to be fully eliminated but a property of the method that shapes which texts it can serve well.
-
-**4. LLM-as-judge is usable but noisy.** Ragas and the agent's own hallucination check both use an LLM as judge. Running the same answers twice at temperature 0 produced stable aggregates (±0.05 per question), validating the method for coarse triage - while the two judges *disagreeing* on absolute faithfulness scores is itself a reminder not to over-trust any single number.
-
----
-
-## Running locally
-
-```bash
-# Build the image
-docker build -t florence-rag .
-
-# Run the service (provide your Anthropic key via .env)
-docker run --rm -p 8000:8000 --env-file .env florence-rag
-```
-
-Then open `http://127.0.0.1:8000/docs` for the interactive API.
-
-### Endpoints
-
-| Method | Path | Purpose |
+| Node | Model | Rationale |
 |---|---|---|
-| `GET` | `/` | Health check |
-| `POST` | `/query` | Ask a question; returns an answer, a rejection, or a paused state |
-| `POST` | `/resume` | Approve or correct a paused low-confidence answer |
+| `domain_router` | Haiku | Yes/no classifier at ten tokens; Using Opus would be ridiculous. Using Fable would be plain funny. |
+| `grade_documents` | Haiku (x5 parallel) | Parallel execution via `ThreadPoolExecutor` gives ~10x speedup over sequential Opus. |
+| `rewrite_query` | Sonnet | Needs to rephrase intelligently; Haiku produces weak rewrites. |
+| `generate` | Sonnet, temp 0.3, max_tokens 4096 | Balance of quality and cost. Opus was too expensive for the marginal gain. |
+| `check_hallucination` | Sonnet, temp 0, JSON output | Haiku was tried first but produced unreliable JSON. |
+
+### Serving
+
+FastAPI service exposing:
+
+- `GET /` serves the static frontend from `api/static/index.html`
+- `GET /health` health check for the load balancer
+- `POST /query` submit a question; returns answer, pause, or rejection
+- `POST /resume` feed human decision back into a paused graph (uses LangGraph's `Command(resume=...)`)
+
+Pydantic validates all requests and responses. Frontend is plain HTML, CSS, and vanilla JavaScript, no build pipeline.
+
+### Deployment
+
+Containerised via Docker:
+
+- Base: `python:3.12-slim`
+- CPU-only PyTorch (installed explicitly from `download.pytorch.org/whl/cpu` to avoid pulling gigabytes of unused CUDA libraries)
+- BGE-large model pre-downloaded at build time as its own layer
+- ChromaDB index baked into the image
+- Final image ~4 GB
+
+Deployed to AWS: pushed to ECR, run on ECS Fargate Express Mode (1 vCPU, 2 GB RAM), behind an Application Load Balancer. Logs stream to CloudWatch. API key injected at runtime via environment variable, never baked into the image.
+
+Note: the live deployment is not currently running to avoid ongoing costs. The Docker image and deployment scripts remain in the repo; recreating the service takes ~10 minutes.
 
 ---
 
-## Known limitations & next steps
+## Evaluation
 
-- **Chunking strategy is not yet empirically settled.** Hierarchical chunking is the working default; a three-way comparison (fixed / semantic / hierarchical) against the gold set is outstanding. The deeper issue is that all fixed-aperture chunking imposes a single notion of "the unit of meaning," whereas in literature that unit is genuinely variable - pointing toward comprehension-driven chunking as the real fix.
-- **HITL state is in-memory.** Pause/resume works within a running server; a durable checkpointer (e.g. DynamoDB/Postgres) is needed for state to survive restarts.
-- **Guardrails are a denylist.** The injection filter is a cheap first layer, not a real defence; the genuine protections are architectural (domain scoping, grounding, no world-acting tools).
-- **No frontend yet.** The current interface is the FastAPI docs page; a proper UI is planned.
+A gold set of 20 questions lives in `evaluation/gold_set.json`, split into three tiers:
+
+- **single_text**: questions answerable from one book alone
+- **cross_text_thematic**: questions requiring comparison across books
+- **adversarial**: out-of-domain questions that should be rejected outright
+
+The evaluation harness (`evaluation/ragas_eval.py`) runs the 17 answerable questions through the full Florence graph, then scores each via Ragas using three reference-free metrics:
+
+- **Faithfulness**: are the answer's claims grounded in the retrieved chunks?
+- **Answer Relevancy**: does the answer address the question?
+- **Context Precision**: were the retrieved chunks actually relevant?
+
+Judge model: `claude-opus-4-5` at temperature 0 for reproducibility.
+
+The 3 adversarial questions get a separate behavioural pass/fail check (did Florence reject them as out-of-domain?).
+
+Results are written to a side-by-side HTML report in `evaluation/reports/` placing Florence's answer next to a model-drafted reference answer. Reference answers are for qualitative comparison only; they are not passed to Ragas and do not influence the scores.
+
+**Evaluation caveat:** the current numbers were produced during broader-scope development when the corpus included ten books. Since scoping down to two, evaluation has not been re-run at the reduced scope. The methodology is stable; the numbers should be understood as characteristic of the broader system.
 
 ---
 
-## Why this project
+## Repository structure
 
-It sits at the intersection of two things I care about: creating **AI/ML systems** (evaluation, observability, deployment - not just a notebook) and the greatest works of world **literature** . Literature as a domain genuinely stresses the limits of current retrieval methods because meaning has many forms. One cannot simply mechanize it. It's worth looking into. The hard problems here: grounding against a corpus the model already knows, retrieving meaning that lives in subtext, are exactly the ones a generic technical-docs RAG never has to confront.
+```
+florence-literature-rag/
+├── agent/                    # LangGraph state machine
+│   ├── graph.py             # Graph assembly, routing, checkpointer
+│   ├── nodes.py             # Individual node implementations
+│   ├── tools.py             # Retrieval (ChromaDB + BGE)
+│   └── prompts.py           # System prompts
+├── api/
+│   ├── main.py              # FastAPI service
+│   └── static/
+│       └── index.html       # Frontend
+├── ingestion/
+│   ├── parse.py             # EPUB + PDF parsers, cleaner
+│   ├── chunk.py             # Three chunking strategies (fixed, semantic, hierarchical)
+│   └── embed_index.py       # BGE embedding + ChromaDB indexing
+├── evaluation/
+│   ├── ragas_eval.py        # Ragas evaluation harness
+│   ├── gold_set.json        # Test questions with reference answers
+│   └── reports/             # HTML reports (generated)
+├── Dockerfile
+├── requirements.txt
+└── README.md
+```
+
+---
+
+## Scope note
+
+Florence was originally scoped at ten primary works plus two critical companions (Virgil, Milton, Dostoevsky, Tolstoy, Bulgakov, Hemingway, Steinbeck, Morrison, Orwell, Huxley, Nabokov, Forster). The corpus was cut to two books (*1984* and *Brave New World*) so downstream work (evaluation, chunking analysis, grounding checks) could be done rigorously rather than gestured at.
+
+Expanding the corpus is straightforward: drop the books into `Books/`, re-run `ingestion/embed_index.py`, and re-run the evaluation harness. The architecture does not need to change.
+
+---
+
+## Key findings
+
+1. **Embedding model is the silent kingmaker.** Swapping `all-MiniLM-L6-v2` for `BAAI/bge-large-en-v1.5` moved retrieval quality from useless to reliable on the same corpus with the same downstream code. Everything downstream is downstream of what the retriever surfaces.
+
+2. **Literary asymmetry in what RAG can do.** Orwell answers well because he narrates his themes plainly, meaning the words on the surface of the query match the words in the retrieved passage. Huxley answers less well because his themes live in irony and imagery, and dense retrieval matches on semantic surface rather than interpreted meaning. This is not a bug that can be eliminated; it is a property of the method.
+
+3. **Right-sizing models matters.** Using Opus for every step is expensive and often wrong. Domain routing and chunk grading are yes/no decisions; Haiku handles them at a fraction of the cost. Generation and auditing warrant Sonnet. Choosing the right size for each step is the difference between a demo that costs cents and one that costs dollars per query.
+
+---
+
+## Known limitations
+
+- **In-memory HITL checkpointer.** `MemorySaver` stores paused conversations in the container's RAM. This is fine for a single-container demo but would not survive a container restart or horizontal scaling. Correct upgrade path is a durable checkpointer backed by DynamoDB or Redis.
+- **Hand-set thresholds.** The confidence threshold (0.7) and retry caps (2 rewrites, 3 rejections) are hand-set based on what worked during development. Production use would call for tuning against a larger evaluation set.
+- **No streaming.** Generation waits for the full response before returning. Streaming would improve perceived latency for long answers.
+- **Evaluation numbers are from broader-scope development.** Ragas scores were produced when the corpus included ten books; not yet re-run at the two-book scope.
+---
+
+## Tech stack
+
+- **Language:** Python 3.12
+- **Agent framework:** LangGraph (with `MemorySaver` for HITL persistence)
+- **LLM provider:** Anthropic (Sonnet for generation and audit, Haiku for classification and grading, Opus as the offline evaluation judge)
+- **Embeddings:** `BAAI/bge-large-en-v1.5` via `sentence-transformers` + `langchain-huggingface`
+- **Vector store:** ChromaDB (local, persistent, HNSW index)
+- **Web framework:** FastAPI + Pydantic + Uvicorn
+- **Evaluation:** Ragas (reference-free variants)
+- **Deployment:** Docker + AWS ECR + ECS Fargate + ALB + CloudWatch
+- **Frontend:** Plain HTML, CSS, vanilla JavaScript (no build pipeline)
+
+
+---
+
+## License
+
+MIT.
+
+---
+
+## Author
+
+Built by Yohann Ian ([github.com/Yohann-Ian](https://github.com/Yohann-Ian)).
+
+Portfolio write-up and design notes: ([techronin.art](https://techronin.art)).
